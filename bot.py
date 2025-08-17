@@ -8,17 +8,13 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from aiohttp import web
-import asyncio
 
 # =================== Настройки ===================
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
-PORT = int(os.getenv('PORT', 8443))  # Для Render
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Публичный URL + /webhook
 LOCAL_MODE = os.getenv('LOCAL_MODE', 'True') == 'True'  # True — локальный запуск
 
-print(">>> Запуск бота", "локально" if LOCAL_MODE else "через webhook")
+print(">>> Запуск бота", "локально" if LOCAL_MODE else "на Render через polling")
 
 # =================== Работа с базой ===================
 def init_db():
@@ -151,24 +147,7 @@ scheduler = AsyncIOScheduler()
 scheduler.add_job(send_daily_task, 'interval', minutes=1, args=[app])
 scheduler.start()
 
-# =================== Webhook ===================
-async def webhook_handler(request):
-    data = await request.json()
-    update = Update.de_json(data, app.bot)
-    await app.update_queue.put(update)
-    return web.Response()
-
-async def on_startup_webhook(app: Application):
-    await app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
-    print(f"✅ Webhook установлен: {WEBHOOK_URL}/webhook")
-
-# =================== Старт ===================
-if LOCAL_MODE:
-    print("✅ Локальный запуск через polling")
-    app.run_polling()
-else:
-    print("✅ Запуск через webhook (Render)")
-    app.on_startup.append(on_startup_webhook)
-    web_app = web.Application()
-    web_app.router.add_post('/webhook', webhook_handler)
-    web.run_app(web_app, port=PORT)
+# =================== Старт бота ===================
+if __name__ == '__main__':
+    print("✅ Бот запущен через polling")
+    app.run_polling()  # <-- без asyncio.run()
