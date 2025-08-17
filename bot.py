@@ -3,32 +3,29 @@ import os
 import random
 import sqlite3
 import re
-import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackContext
+from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiohttp import web
+import asyncio
 
-# Загружаем переменные окружения (.env должен содержать BOT_TOKEN=...)
+# =================== Настройки ===================
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
+PORT = int(os.getenv('PORT', 8443))  # Для Render
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Публичный URL + /webhook
+LOCAL_MODE = os.getenv('LOCAL_MODE', 'True') == 'True'  # True — локальный запуск
 
-print(">>> Я запускаю правильный bot.py")
-
-# Загружаем задачи из tasks.json
-with open('tasks.json', 'r', encoding='utf-8') as f:
-    TASKS = json.load(f)
+print(">>> Запуск бота", "локально" if LOCAL_MODE else "через webhook")
 
 # =================== Работа с базой ===================
-
 def init_db():
-    """Инициализация базы данных"""
     try:
         conn = sqlite3.connect('db.sqlite')
         c = conn.cursor()
-        c.execute('DROP TABLE IF EXISTS users')
-        c.execute('''CREATE TABLE users (
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             reminder_time TEXT
         )''')
@@ -40,7 +37,6 @@ def init_db():
         conn.close()
 
 def save_user_time(user_id, time):
-    """Сохраняем время напоминания для пользователя"""
     try:
         conn = sqlite3.connect('db.sqlite')
         c = conn.cursor()
@@ -53,7 +49,6 @@ def save_user_time(user_id, time):
         conn.close()
 
 def get_users():
-    """Получаем всех пользователей с их временем"""
     try:
         conn = sqlite3.connect('db.sqlite')
         c = conn.cursor()
@@ -66,7 +61,6 @@ def get_users():
         return {}
 
 def remove_user(user_id):
-    """Удаляем пользователя из базы"""
     try:
         conn = sqlite3.connect('db.sqlite')
         c = conn.cursor()
@@ -78,13 +72,24 @@ def remove_user(user_id):
     finally:
         conn.close()
 
-# =================== Логика бота ===================
+# =================== Загрузка задач ===================
+def load_tasks():
+    try:
+        with open('tasks.json', 'r', encoding='utf-8') as f:
+            tasks = json.load(f)
+            print(f"✅ Загружено {len(tasks)} задач из tasks.json")
+            return tasks
+    except Exception as e:
+        print(f"❌ Ошибка при загрузке tasks.json: {e}")
+        return []
 
+TASKS = load_tasks()
+
+# =================== Логика бота ===================
 def is_valid_time(time_str):
-    """Проверка формата времени (HH:MM)"""
     return bool(re.match(r'^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$', time_str))
 
-async def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         'Привет! Я "Little step to happiness". 🌸\n'
         'Каждый день я буду присылать тебе маленькое расслабляющее задание.\n\n'
@@ -92,7 +97,7 @@ async def start(update: Update, context: CallbackContext):
         '/settime 10:00'
     )
 
-async def set_time(update: Update, context: CallbackContext):
+async def set_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text('Укажи время в формате HH:MM, например: /settime 10:00')
         return
@@ -104,7 +109,7 @@ async def set_time(update: Update, context: CallbackContext):
     save_user_time(user_id, time)
     await update.message.reply_text(f'⏰ Напоминания установлены на {time}! Каждый день в это время я пришлю тебе задание 🌿')
 
-async def help_command(update: Update, context: CallbackContext):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         'Я "Little step to happiness"! Вот что я умею:\n\n'
         '/start - Начать работу\n'
@@ -113,12 +118,11 @@ async def help_command(update: Update, context: CallbackContext):
         '/help - Показать эту справку'
     )
 
-async def stop(update: Update, context: CallbackContext):
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     remove_user(user_id)
     await update.message.reply_text('❌ Напоминания отключены. Чтобы включить снова — используй /settime HH:MM')
 
-# Отправка ежедневных задач
 async def send_daily_task(app: Application):
     users = get_users()
     current_time = datetime.now().strftime('%H:%M')
@@ -132,21 +136,39 @@ async def send_daily_task(app: Application):
                 print(f"❌ Ошибка при отправке {user_id}: {e}")
 
 # =================== Запуск ===================
+init_db()
 
-def main():
-    init_db()
-    app = Application.builder().token(TOKEN).build()
+app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('settime', set_time))
-    app.add_handler(CommandHandler('help', help_command))
-    app.add_handler(CommandHandler('stop', stop))
+# Handlers
+app.add_handler(CommandHandler('start', start))
+app.add_handler(CommandHandler('settime', set_time))
+app.add_handler(CommandHandler('help', help_command))
+app.add_handler(CommandHandler('stop', stop))
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_daily_task, 'interval', minutes=1, args=[app])
-    scheduler.start()
+# Scheduler
+scheduler = AsyncIOScheduler()
+scheduler.add_job(send_daily_task, 'interval', minutes=1, args=[app])
+scheduler.start()
 
+# =================== Webhook ===================
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.de_json(data, app.bot)
+    await app.update_queue.put(update)
+    return web.Response()
+
+async def on_startup_webhook(app: Application):
+    await app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+    print(f"✅ Webhook установлен: {WEBHOOK_URL}/webhook")
+
+# =================== Старт ===================
+if LOCAL_MODE:
+    print("✅ Локальный запуск через polling")
     app.run_polling()
-
-if __name__ == '__main__':
-    main()
+else:
+    print("✅ Запуск через webhook (Render)")
+    app.on_startup.append(on_startup_webhook)
+    web_app = web.Application()
+    web_app.router.add_post('/webhook', webhook_handler)
+    web.run_app(web_app, port=PORT)
