@@ -14,6 +14,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
 
+print(">>> Я запускаю правильный bot.py")
+
 # Загружаем задачи из tasks.json
 with open('tasks.json', 'r', encoding='utf-8') as f:
     TASKS = json.load(f)
@@ -131,23 +133,20 @@ async def send_daily_task(app: Application):
 
 # =================== Запуск ===================
 
-async def main():
+def main():
     init_db()
     app = Application.builder().token(TOKEN).build()
 
-    # Регистрируем команды
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('settime', set_time))
     app.add_handler(CommandHandler('help', help_command))
     app.add_handler(CommandHandler('stop', stop))
 
-    # Планировщик для задач
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_daily_task, 'interval', minutes=1, args=[app])  # проверка каждую минуту
+    scheduler.add_job(send_daily_task, 'interval', minutes=1, args=[app])
     scheduler.start()
 
-    # Запускаем бота 🚀
-    await app.run_polling()
+    app.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
