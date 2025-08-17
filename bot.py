@@ -7,7 +7,7 @@ import re
 import asyncio
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Загрузка переменных окружения из .env
@@ -23,9 +23,7 @@ def init_db():
     try:
         conn = sqlite3.connect('db.sqlite')
         c = conn.cursor()
-        # Удаляем старую таблицу, если она существует, чтобы избежать конфликтов
         c.execute('DROP TABLE IF EXISTS users')
-        # Создаём таблицу с корректной структурой
         c.execute('''CREATE TABLE users (
             user_id INTEGER PRIMARY KEY,
             reminder_time TEXT
@@ -81,7 +79,7 @@ def is_valid_time(time_str):
     return bool(re.match(r'^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$', time_str))
 
 # Команда /start
-async def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         'Привет! Я "Little step to happiness". '
         'Я буду присылать тебе каждый день расслабляющее дело. '
@@ -89,7 +87,7 @@ async def start(update: Update, context: CallbackContext):
     )
 
 # Команда /settime
-async def set_time(update: Update, context: CallbackContext):
+async def set_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text('Пожалуйста, укажи время в формате HH:MM, например: /settime 10:00')
         return
@@ -102,7 +100,7 @@ async def set_time(update: Update, context: CallbackContext):
     await update.message.reply_text(f'Установлено время: {time}. Теперь каждый день в {time} я пришлю тебе расслабляющее дело!')
 
 # Команда /help
-async def help_command(update: Update, context: CallbackContext):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         'Я "Little step to happiness"! Вот что я умею:\n'
         '/start - Начать работу с ботом\n'
@@ -111,57 +109,4 @@ async def help_command(update: Update, context: CallbackContext):
         '/help - Показать эту справку'
     )
 
-# Команда /stop
-async def stop(update: Update, context: CallbackContext):
-    user_id = update.message.from_user.id
-    remove_user(user_id)
-    await update.message.reply_text('Напоминания отключены. Можешь снова включить их с помощью /settime HH:MM')
-
-# Функция отправки ежедневных задач
-async def send_daily_task(app: Application):
-    users = get_users()
-    current_time = datetime.now().strftime('%H:%M')
-    for user_id, data in users.items():
-        if data['time'] == current_time:
-            task = random.choice(TASKS)
-            try:
-                await app.bot.send_message(chat_id=user_id, text=f'Твой маленький шаг к счастью сегодня: {task}')
-                print(f"Отправлена задача пользователю {user_id}: {task}")
-            except Exception as e:
-                print(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
-
-# Основная асинхронная функция
-async def main():
-    init_db()
-    application = Application.builder().token(TOKEN).build()
-
-    # Добавление обработчиков команд
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('settime', set_time))
-    application.add_handler(CommandHandler('help', help_command))
-    application.add_handler(CommandHandler('stop', stop))
-
-    # Планировщик для отправки задач
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_daily_task, 'interval', minutes=1, args=[application])
-    scheduler.start()
-
-    # Запуск бота
-    try:
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
-        # Ждём бесконечно, пока бот работает
-        await asyncio.Event().wait()
-    finally:
-        await application.updater.stop()
-        await application.stop()
-        scheduler.shutdown()
-
-if __name__ == '__main__':
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(main())
-    finally:
-        loop.close()
+# Команда
